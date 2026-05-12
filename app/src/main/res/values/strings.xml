@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">BackupSecretary</string>
+
+    <string name="accessibility_service_description">
+        Permite que Backup Secretary detecte mensajes de WhatsApp y responda automáticamente.
+    </string>
 </resources>
