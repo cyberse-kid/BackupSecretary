@@ -1,5 +1,8 @@
 package com.clickwise.backupsecretary
 
+
+import android.content.ComponentName
+import com.clickwise.backupsecretary.service.WhatsAppAccessibilityService
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -34,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         loadLeads()
+        checkAccessibilityService()
     }
 
     private fun setupRecyclerView() {
@@ -78,27 +82,36 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkAccessibilityService() {
         val isEnabled = isAccessibilityServiceEnabled()
-        binding.tvBotStatus.text = if (isEnabled) "🟢 Bot activo" else "🔴 Bot inactivo"
 
-        if (!isEnabled) {
-            AlertDialog.Builder(this)
-                .setTitle("Activar el bot")
-                .setMessage("Para que el bot responda WhatsApp automáticamente, debes activar el servicio de accesibilidad.")
-                .setPositiveButton("Activar") { _, _ ->
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
-                .setNegativeButton("Después", null)
-                .show()
+        binding.tvBotStatus.text = if (isEnabled) {
+            "Bot activo"
+        } else {
+            "Bot inactivo"
         }
+
+        binding.btnActivateBot.text = if (isEnabled) {
+            "Bot ya está activo"
+        } else {
+            "Activar bot"
+        }
+
+        binding.btnActivateBot.isEnabled = !isEnabled
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val service = "${packageName}/.service.WhatsAppAccessibilityService"
+        val expectedService = ComponentName(
+            this,
+            WhatsAppAccessibilityService::class.java
+        ).flattenToString()
+
         val enabledServices = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        return enabledServices.contains(service)
+
+        return enabledServices
+            .split(":")
+            .any { it.equals(expectedService, ignoreCase = true) }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
