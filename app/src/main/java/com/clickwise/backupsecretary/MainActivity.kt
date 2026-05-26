@@ -1,19 +1,18 @@
 package com.clickwise.backupsecretary
 
-
 import android.content.ComponentName
-import com.clickwise.backupsecretary.service.WhatsAppAccessibilityService
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.clickwise.backupsecretary.databinding.ActivityMainBinding
 import com.clickwise.backupsecretary.network.RetrofitClient
+import com.clickwise.backupsecretary.service.WhatsAppAccessibilityService
+import com.clickwise.backupsecretary.service.WhatsAppNotificationListenerService
 import com.clickwise.backupsecretary.ui.LeadsAdapter
 import com.clickwise.backupsecretary.util.TokenManager
 import kotlinx.coroutines.launch
@@ -31,13 +30,13 @@ class MainActivity : AppCompatActivity() {
         setupRecyclerView()
         setupButtons()
         loadLeads()
-        checkAccessibilityService()
+        checkBotPermissions()
     }
 
     override fun onResume() {
         super.onResume()
         loadLeads()
-        checkAccessibilityService()
+        checkBotPermissions()
     }
 
     private fun setupRecyclerView() {
@@ -51,6 +50,10 @@ class MainActivity : AppCompatActivity() {
     private fun setupButtons() {
         binding.btnActivateBot.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        binding.btnActivateNotifications.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
 
         binding.swipeRefresh.setOnRefreshListener {
@@ -73,29 +76,37 @@ class MainActivity : AppCompatActivity() {
                         else android.view.View.GONE
                 }
             } catch (e: Exception) {
-                // Error de red
+                // Network errors are surfaced by keeping the current list.
             } finally {
                 binding.swipeRefresh.isRefreshing = false
             }
         }
     }
 
-    private fun checkAccessibilityService() {
-        val isEnabled = isAccessibilityServiceEnabled()
+    private fun checkBotPermissions() {
+        val accessibilityEnabled = isAccessibilityServiceEnabled()
+        val notificationsEnabled = isNotificationListenerEnabled()
 
-        binding.tvBotStatus.text = if (isEnabled) {
-            "Bot activo"
-        } else {
-            "Bot inactivo"
+        binding.tvBotStatus.text = when {
+            accessibilityEnabled && notificationsEnabled -> "Bot activo: WhatsApp abierto y bloqueado"
+            accessibilityEnabled -> "Bot activo solo con WhatsApp abierto"
+            notificationsEnabled -> "Bot activo con pantalla bloqueada"
+            else -> "Bot inactivo"
         }
 
-        binding.btnActivateBot.text = if (isEnabled) {
-            "Bot ya está activo"
+        binding.btnActivateBot.text = if (accessibilityEnabled) {
+            "Accesibilidad activa"
         } else {
-            "Activar bot"
+            "Activar accesibilidad"
         }
+        binding.btnActivateBot.isEnabled = !accessibilityEnabled
 
-        binding.btnActivateBot.isEnabled = !isEnabled
+        binding.btnActivateNotifications.text = if (notificationsEnabled) {
+            "Notificaciones activas"
+        } else {
+            "Activar notificaciones"
+        }
+        binding.btnActivateNotifications.isEnabled = !notificationsEnabled
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -110,6 +121,22 @@ class MainActivity : AppCompatActivity() {
         ) ?: return false
 
         return enabledServices
+            .split(":")
+            .any { it.equals(expectedService, ignoreCase = true) }
+    }
+
+    private fun isNotificationListenerEnabled(): Boolean {
+        val expectedService = ComponentName(
+            this,
+            WhatsAppNotificationListenerService::class.java
+        ).flattenToString()
+
+        val enabledListeners = Settings.Secure.getString(
+            contentResolver,
+            "enabled_notification_listeners"
+        ) ?: return false
+
+        return enabledListeners
             .split(":")
             .any { it.equals(expectedService, ignoreCase = true) }
     }
