@@ -9,6 +9,8 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.clickwise.backupsecretary.model.WhatsAppMessageRequest
 import com.clickwise.backupsecretary.network.RetrofitClient
+import com.clickwise.backupsecretary.util.BotDeduplicator
+import com.clickwise.backupsecretary.util.BotReplyMemory
 import com.clickwise.backupsecretary.util.TokenManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +27,6 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var lastProcessedKey = ""
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
@@ -34,7 +35,13 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         val notification = sbn.notification ?: return
         val extras = notification.extras
         val contactName = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
-        val message = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        var message = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        if (message.isBlank()) {
+            val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
+            if (bigText.isNotBlank()) {
+                message = bigText
+            }
+        }
         val actionTitles = notification.actions
             ?.joinToString { it.title?.toString().orEmpty() }
             .orEmpty()
@@ -46,16 +53,19 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
 
         if (contactName.isBlank() || message.isBlank()) return
         if (isGroupOrSummaryNotification(notification, extras, message)) return
-
-        val notificationKey = "${sbn.packageName}:${sbn.postTime}:$contactName:$message"
-        if (notificationKey == lastProcessedKey) return
-        lastProcessedKey = notificationKey
+        if (BotReplyMemory.wasSentByBot(contactName, message)) {
+            Log.d(TAG, "Ignorando respuesta propia antes de llamar a la API")
+            return
+        }
 
         val replyAction = findReplyAction(notification)
         if (replyAction == null) {
             Log.d(TAG, "Notificacion sin accion de responder: $contactName -> $message")
             return
         }
+
+        val messageKey = "$contactName:$message"
+        if (BotDeduplicator.isDuplicate(messageKey)) return
 
         Log.d(TAG, "Mensaje por notificacion de $contactName: $message")
 
@@ -70,13 +80,13 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         replyAction: Notification.Action
     ) {
         try {
-            val token = TokenManager.getAccessToken(applicationContext)
+            var token = TokenManager.getAccessToken(applicationContext)
             if (token.isNullOrBlank()) {
                 Log.e(TAG, "No hay token guardado. Inicia sesion en la app.")
                 return
             }
 
-            val response = RetrofitClient.api.sendMessage(
+            var response = RetrofitClient.api.sendMessage(
                 token = TokenManager.bearerToken(token),
                 request = WhatsAppMessageRequest(
                     contact_name = contactName,
@@ -86,6 +96,26 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
                 )
             )
 
+            if (response.code() == 401) {
+                Log.w(TAG, "Token expirado o inválido en notificación (401), renovando...")
+                val newToken = TokenManager.refreshAccessToken(applicationContext)
+                if (!newToken.isNullOrBlank()) {
+                    token = newToken
+                    response = RetrofitClient.api.sendMessage(
+                        token = TokenManager.bearerToken(token),
+                        request = WhatsAppMessageRequest(
+                            contact_name = contactName,
+                            contact_phone = contactName,
+                            message = message,
+                            message_type = "text"
+                        )
+                    )
+                } else {
+                    Log.e(TAG, "No se pudo renovar token para responder notificación.")
+                    return
+                }
+            }
+
             if (!response.isSuccessful) {
                 Log.e(TAG, "API error ${response.code()}: ${response.errorBody()?.string()}")
                 return
@@ -94,6 +124,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
             val reply = response.body()?.reply?.trim()
             if (reply.isNullOrBlank()) return
 
+            BotReplyMemory.remember(contactName, reply)
             sendInlineReply(replyAction, reply)
             Log.d(TAG, "Respuesta enviada por notificacion")
         } catch (e: Exception) {
