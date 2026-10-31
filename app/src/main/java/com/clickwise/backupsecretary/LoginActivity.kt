@@ -25,8 +25,44 @@ class LoginActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val token = TokenManager.getAccessToken(applicationContext)
             if (!token.isNullOrEmpty()) {
-                goToMain()
-                return@launch
+                showLoading(true)
+                try {
+                    val verifyResponse = RetrofitClient.api.getLeads(
+                        token = TokenManager.bearerToken(token),
+                        page = 1
+                    )
+                    if (verifyResponse.isSuccessful) {
+                        goToMain()
+                        return@launch
+                    } else if (verifyResponse.code() == 401) {
+                        val newToken = TokenManager.refreshAccessToken(applicationContext)
+                        if (!newToken.isNullOrEmpty()) {
+                            val retryResponse = RetrofitClient.api.getLeads(
+                                token = TokenManager.bearerToken(newToken),
+                                page = 1
+                            )
+                            if (retryResponse.isSuccessful) {
+                                goToMain()
+                                return@launch
+                            }
+                            if (retryResponse.code() == 401) {
+                                TokenManager.clearTokens(applicationContext)
+                                showError("Sesión expirada. Por favor inicia sesión.")
+                            } else {
+                                showError("No se pudo validar la sesión (HTTP ${retryResponse.code()}). Intenta más tarde.")
+                            }
+                        } else {
+                            TokenManager.clearTokens(applicationContext)
+                            showError("Sesión expirada o servidor actualizado. Por favor inicia sesión.")
+                        }
+                    } else {
+                        showError("No se pudo validar la sesión (HTTP ${verifyResponse.code()}). Intenta más tarde.")
+                    }
+                } catch (e: Exception) {
+                    showError("No se pudo conectar para validar la sesión. Revisa tu conexión e intenta más tarde.")
+                } finally {
+                    showLoading(false)
+                }
             }
         }
 
